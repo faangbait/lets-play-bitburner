@@ -1,5 +1,6 @@
 /** @param {NS} ns **/
-
+import HackableBaseServer from "./if.server.hackable"
+import BasePlayer from "./if.player";
 /**
  * returns an array of servers dynamically
  */
@@ -13,62 +14,52 @@ function dpList(ns, current="home", set=new Set()) {
 	return Array.from(set.keys())
 }
 
-function threadCount(ns, hostname, scriptRam) {
-	let threads = 0;
-	let free_ram = ns.getServerMaxRam(hostname) - ns.getServerUsedRam(hostname)
-
-	threads = free_ram / scriptRam
-	return Math.floor(threads)
-}
-
 export async function main(ns) {
-	let servers = dpList(ns)
-	let target = "foodnstuff"
+	let sList = dpList(ns)
+	let servers = [];
+	let player = new BasePlayer(ns, "player")
+	await player.updateCache(false)
+	for (let s of sList) {
+		let server = new HackableBaseServer(ns, s)
+		await server.updateCache(false);
+		servers.push(server);
+	}
+
+	let target = new HackableBaseServer(ns, "foodnstuff")
+
 	ns.disableLog("ALL");
 	for (let server of servers) {
-		await ns.scp(["bin.wk.js", "bin.hk.js", "bin.gr.js"], "home", server)
+		await ns.scp(["bin.wk.js", "bin.hk.js", "bin.gr.js"], "home", server.id);
 	}
 
 	while(true) {
 		for (let server of servers) {
-			if (ns.hasRootAccess(server) && ns.hasRootAccess(target)) {
+			if (server.admin && target.admin) {
 				// divert all of this server's available threads to the most valuable command
-				if (ns.getServerSecurityLevel(target) > ns.getServerMinSecurityLevel(target)) {
-					let available_threads = threadCount(ns, server, 1.75)
+				if (target.security.level > target.security.min) {
+					let available_threads = server.threadCount(1.75)
 					// weaken the target while security > minsecurity
 					if (available_threads >= 1) {
-						ns.exec("bin.wk.js", server, available_threads, target)
+						ns.exec("bin.wk.js", server.id, available_threads, target.id)
 					}
-				} else if (ns.getServerMoneyAvailable(target) < ns.getServerMaxMoney(target)) {
-					let available_threads = threadCount(ns, server, 1.75)
+				} else if (target.money.available < target.money.max) {
+					let available_threads = server.threadCount(1.75)
 
 					// grow the target while money < maxmoney
 					if (available_threads >= 1) {
-						ns.exec("bin.gr.js", server, available_threads, target)
+						ns.exec("bin.gr.js", server.id, available_threads, target.id)
 					}
 				} else {
-					let available_threads = threadCount(ns, server, 1.7)
+					let available_threads = server.threadCount(1.7)
 
 					// hack the target
 					if (available_threads >= 1) {
-						ns.exec("bin.hk.js", server, available_threads, target)
+						ns.exec("bin.hk.js", server.id, available_threads, target.id)
 					}
 				}
 
 			} else {
-				// open all possible ports on every server; then attempt to nuke the server
-				try {
-					ns.brutessh(server)
-					ns.ftpcrack(server)
-					ns.relaysmtp(server)
-					ns.httpworm(server)
-					ns.sqlinject(server)
-				} catch {}
-				
-				try {
-					ns.nuke(server)
-				} catch {}
-
+				server.sudo();
 			}
 
 		await ns.sleep(10)
