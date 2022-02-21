@@ -64,7 +64,7 @@ export async function main(ns) {
 
 	while (true) {
 		let attackers = servers.filter(s => s.isAttacker);
-		targets = servers.filter(s => s.isTarget && s.isHWGWReady);
+		targets = servers.filter(s => s.isTarget);
 		targets.sort((a,b) => b.money.growth - a.money.growth)
 
 		let available_ram = new Map();
