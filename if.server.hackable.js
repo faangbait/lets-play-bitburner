@@ -116,6 +116,35 @@ export default class HackableBaseServer extends BaseServer {
 		this._id = hostname
 	}
 
+    get isTarget() { return (!this.purchased && !this.isHome && (this.money.max > 0) && (this.ports.open >= this.ports.required) && this.admin && (this.level <= this.ns.getPlayer().hacking))}
+    get isAttacker() { return ( this.purchased || this.isHome || (this.ram.max > 0 && this.admin))}
+	get isHWGWReady() { return (this.money.available == this.money.max && this.security.level == this.security.min)}
+    get pids() { return this.ns.ps(this.id) }
+    get targeting_pids() { 
+        const dpList = (ns, current="home", set=new Set()) => {
+            let connections = ns.scan(current);
+            let next = connections.filter(c => !set.has(c));
+            next.forEach(n => {
+                set.add(n);
+                return dpList(ns, n, set);
+            });
+            return Array.from(set.keys());
+        };
+
+        let pids = [];
+        for (let server of dpList(this.ns)) {
+            const ps = this.ns.ps(server);
+            for (let process of ps) {
+                if (process.args.length > 0) {
+                    if (process.args[0] === this.id) {
+                        pids.push(process);
+                    }
+                }
+            }
+        }
+        return pids;
+    }
+
 	sudo = () => {
 		try {
 			ns.brutessh(this.id)
