@@ -147,15 +147,15 @@ export default class HackableBaseServer extends BaseServer {
 
 	sudo = () => {
 		try {
-			ns.brutessh(this.id)
-			ns.ftpcrack(this.id)
-			ns.relaysmtp(this.id)
-			ns.httpworm(this.id)
-			ns.sqlinject(this.id)
+			this.ns.brutessh(this.id)
+			this.ns.ftpcrack(this.id)
+			this.ns.relaysmtp(this.id)
+			this.ns.httpworm(this.id)
+			this.ns.sqlinject(this.id)
 		} catch {}
 				
 		try {
-			ns.nuke(this.id)
+			this.ns.nuke(this.id)
 		} catch {}
 	}
 
