@@ -49,22 +49,7 @@ export async function main(ns) {
 							ns.exec("bin.hk.js", server, available_threads, target)
 						}
 					}
-
-				} else {
-					// open all possible ports on every server; then attempt to nuke the server
-					try {
-						ns.brutessh(server)
-						ns.ftpcrack(server)
-						ns.relaysmtp(server)
-						ns.httpworm(server)
-						ns.sqlinject(server)
-					} catch {}
-					
-					try {
-						ns.nuke(server)
-					} catch {}
-			}
-
+				}
 			}
 
 		await ns.sleep(10)
