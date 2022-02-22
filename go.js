@@ -45,11 +45,16 @@ export async function main(ns) {
 
 	while (true) {
 		for (let server of servers) {
+			// Gain admin on all servers that we can
 			if (!server.admin && server.ports.required <= player.ports) {
 				server.sudo();
+			}
+			// Upload files to any server that doesn't have them
+			if (ns.ls(server.id, "bin.").length == 0) {
 				await ns.scp(["bin.wk.js", "bin.hk.js", "bin.gr.js"], "home", server.id)
 			}
 		}
+
 		execHackingScript(ns, servers);
 		await ns.sleep(10);
 	}
