@@ -1,10 +1,13 @@
 /** @param {NS} ns **/
 
 import { handleDB } from "./lib.db";
-const reservedHomeRam = 12;
+import { Cacheable } from "./lib.utils";
+import { reservedHomeRam } from "./var.constants";
 
-export default class BaseServer {
+
+export default class BaseServer extends Cacheable {
 	constructor(ns, hostname) {
+        super();
 		this.ns = ns;
 		this._id = hostname;
 	}
@@ -22,7 +25,7 @@ export default class BaseServer {
         return properties
     }
 
-	get id() { return this._id }
+    get id() { return this._id }
     get data() { return this.ns.getServer(this.id); }
     get updated_at() { return new Date().valueOf(); }
     get hostname() { return this.data.hostname; }
