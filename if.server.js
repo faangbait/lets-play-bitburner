@@ -2,8 +2,8 @@
 
 import { handleDB } from "./lib.db";
 import { Cacheable } from "./lib.utils";
+import { reservedHomeRam } from "./var.constants";
 
-const reservedHomeRam = 12;
 
 export default class BaseServer extends Cacheable {
 	constructor(ns, hostname) {
