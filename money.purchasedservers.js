@@ -10,7 +10,7 @@ const canAffordServer = (player, desired_power) => {
 	let cost_per_ram = 55000;
 	return (player.money >= cost_per_ram * powerToRam(desired_power))
 }
-function doPurchase(ns, player, purchased, desired_power) {
+async function doPurchase(ns, player, purchased, desired_power) {
 	let highest_number_server = purchased.map(s => s.id.split("-")[1])
 
 	highest_number_server.sort((a,b) => parseInt(b) - parseInt(a))
@@ -22,7 +22,9 @@ function doPurchase(ns, player, purchased, desired_power) {
 
 	if (canAffordServer(player, desired_power)) {
 		ns.tprint("Buying server cluster-", highest_number_server, " of power ", desired_power);
-		return ns.purchaseServer('cluster-' + highest_number_server, powerToRam(desired_power));
+		let s = ns.purchaseServer('cluster-' + highest_number_server, powerToRam(desired_power));
+		await ns.scp(["bin.hk.js", "bin.wk.js", "bin.gr.js"], "home", s)
+		return s
 	}
 	return null;
 }
@@ -60,7 +62,7 @@ export async function main(ns) {
 		}
 
 		desired_power = Math.min(20, maxServerPower, desired_power);
-		let newServer = doPurchase(ns, player, purchased, desired_power)
+		let newServer = await doPurchase(ns, player, purchased, desired_power)
 		if (newServer) { purchased.push(new BaseServer(ns, newServer)); }
 	} else {
 		// sell a server if we need to, then purchase a server
@@ -70,7 +72,7 @@ export async function main(ns) {
 		if (canAffordServer(player, desired_power)) {
 			if (weakestServer.power < Math.ceil(maxServerPower * .8) ) {
 				if (sellServer(ns, weakestServer)) {
-					doPurchase(ns, player, purchased, desired_power)
+					await doPurchase(ns, player, purchased, desired_power)
 					servers = [];
 					slist = dpList(ns);
 					for (let s of slist) {
