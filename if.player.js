@@ -1,8 +1,10 @@
 /** @param {NS} ns **/
 import { handleDB } from "./lib.db";
+import { Cacheable } from "lib.utils";
 
-export default class BasePlayer {
+export default class BasePlayer extends Cacheable {
     constructor(ns, id) {
+        super();
         this.ns = ns;
         this._id = id;
     }
