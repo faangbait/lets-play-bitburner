@@ -30,8 +30,7 @@ export class Cacheable {
 				oldValue = subObj;
 				this.updateCache(false);
 			}
-			await this.ns.asleep(1);
+			await this.ns.asleep(10);
 		}
-
 	}
 }
