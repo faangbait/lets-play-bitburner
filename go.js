@@ -31,11 +31,21 @@ function execHackingScript(ns, servers) {
 /** @param {NS} ns **/
 export async function main(ns) {
 	let player = new BasePlayer(ns, "player");
+	// player.updateCache().catch(console.error);
+	player.createEventListener("hacking.level").catch(console.error)
+	player.createEventListener("faction.membership").catch(console.error)
+
 
 	let servers = [];
 	let slist = dpList(ns);
 	for (let s of slist) {
 		servers.push(new HackableBaseServer(ns, s))
+	}
+
+	for (let server of servers) {
+		// server.updateCache().catch(console.error)
+		server.createEventListener("admin").catch(console.error)
+		server.createEventListener("backdoored").catch(console.error)
 	}
 
 	for (let server of servers) {
@@ -56,6 +66,6 @@ export async function main(ns) {
 		}
 
 		execHackingScript(ns, servers);
-		await ns.sleep(10);
+		await ns.asleep(10);
 	}
 }
