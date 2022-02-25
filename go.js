@@ -21,9 +21,13 @@ export async function main(ns) {
 	await player.updateCache(false)
 	for (let s of sList) {
 		let server = new HackableBaseServer(ns, s)
-		await server.updateCache(false);
 		servers.push(server);
 	}
+
+	for (let server of servers) {
+		await server.updateCache(false);
+	}
+
 
 	let target = new HackableBaseServer(ns, "foodnstuff")
 
