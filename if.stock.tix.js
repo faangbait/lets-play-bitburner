@@ -1,10 +1,29 @@
 import BaseStock from "./if.stock" ;
 
+const stock_list = ["ECP", "MGCP", "BLD", "CLRK", "OMTK", "FSIG", "KGI", "FLCM", "STM", "DCOMM", "HLS", "VITA", "ICRS", "UNV", "AERO", "OMN", "SLRS", "GPH", "NVMD", "WDS", "LXO", "RHOC", "APHE", "SYSC", "CTK", "NTLK", "OMGA", "FNS", "JGN", "SGC", "CTYS", "MDYN", "TITN"]
+const cycleLength = 75;
+const lowerBoundHistoryLength = 21;
+const upperBoundHistoryLength = 151;
+const nearTermWindowLength = 10;
+const longTermWindowLength = 76;
+const inversionDetectionTolerance = 0.10;
+
+export function getAllTIXStocks(ns) {
+	let stocks = [];
+	for (let s of stock_list) {
+		stocks.push(new TIXStock(ns, s));
+	}
+	return stocks;
+}
+
 export default class TIXStock extends BaseStock {
 	constructor (ns, ticker) {
 		super();
 		this.ns = ns;
 		this._ticker = ticker;
+		this.history = [];
+		this.cycleTick = 0;
+		this.currentTick = 0;
 	}
 
 	get maxShares() { return this.ns.stock.getMaxShares(this.ticker); }
@@ -12,7 +31,8 @@ export default class TIXStock extends BaseStock {
 	get price() { 
 		return {
 			bull: this.ns.stock.getAskPrice(this.ticker),
-			bear: this.ns.stock.getBidPrice(this.ticker)
+			bear: this.ns.stock.getBidPrice(this.ticker),
+			avg: (this.ns.stock.getAskPrice(this.ticker) + this.ns.stock.getBidPrice(this.ticker)) / 2
 		}
 	}
 	
@@ -43,6 +63,58 @@ export default class TIXStock extends BaseStock {
 	
 	unbuy(shares=this.position.bull) {
 		return this.ns.stock.sell(this.ticker, shares);
+	}
+
+	get bullish() { return this.forecast > .535; }
+	get bearish() { return this.forecast < .465; }
+
+	get hasTicked() { return this.price.avg != this.lastPrice }
+	
+	onTickDetected() {
+		this.currentTick = (this.currentTick + 1) % 75;
+		this.lastPrice = this.price.avg;
+		this.lastForecast = this.forecast;
+		this.history.unshift(this.price.avg);
+		this.history = this.history.slice(0, upperBoundHistoryLength);
+	}
+
+	get forecast() { return this.longTermForecast }
+
+	calcForecast(history=this.history) {
+		return history.reduce((ups, price, idx) => idx == 0 ? 0 : (this.history[idx - 1] > price ? ups + 1 : ups), 0) / (history.length - 1);
+	}
+
+	get nearTermForecast() { return this.calcForecast(this.history.slice(0, nearTermWindowLength)) }
+	get longTermForecast() { return this.calcForecast(this.history.slice(0, this.probWindowLength)) }
+
+	get volatility() {
+		return this.history.reduce((max, price, idx) => Math.max(max, idx == 0 ? 0 : Math.abs(this.history[idx - 1] - price) / price), 0); 
+	}
+
+	get std_dev() {
+        return Math.sqrt((this.forecast * (1 - this.forecast)) / this.probWindowLength);
+	}
+
+	get probWindowLength() {
+		return Math.min(longTermWindowLength, (this.currentTick - this.cycleTick) % cycleLength); 
+	}
+
+    detectInversion(p1,p2) {
+		const tol2 = inversionDetectionTolerance / 2;
+		return ((p1 >= 0.5 + tol2) && (p2 <= 0.5 - tol2) && p2 <= (1 - p1) + inversionDetectionTolerance)
+        /* Reverse Condition: */ || ((p1 <= 0.5 - tol2) && (p2 >= 0.5 + tol2) && p2 >= (1 - p1) - inversionDetectionTolerance);
+	}
+
+	get expected_value() {
+		let normalizedProb = (this.forecast - 0.5);
+		let conservativeProb = normalizedProb < 0 ? Math.min(0, normalizedProb + this.std_dev) : Math.max(0, normalizedProb - this.std_dev);
+		return this.volatility * conservativeProb;
+	}
+
+	get preNearTermWindowProb() { return this.calcForecast(this.history.slice(nearTermWindowLength)); }
+
+	get hasInverted() {
+		return this.detectInversion(this.preNearTermWindowProb, this.nearTermForecast) && (this.history.length >= lowerBoundHistoryLength)
 	}
 
 	async updateCache(repeat=true, kv=new Map()) {
