@@ -5,10 +5,21 @@ export default class FourSigmaTIXStock extends TIXStock {
 		super();
 		this.ns = ns;
 		this._ticker = ticker;
+		this.history = [];
+		this.cycleTick = 0;
+		this.currentTick = 0;
 	}
 
 	get forecast() { return this.ns.stock.getForecast(this.ticker)}
 	get volatility() { return this.ns.stock.getVolatility(this.ticker)}
+	get expected_value() { return this.forecast * this.volatility }
+
+	calcForecast(history=this.history) {
+		return this.forecast
+	}
+
+	get std_dev() { return 0 }
+	get hasInverted() { return ((this.lastForecast < .5 && this.forecast >= .5) || (this.lastForecast >= .5 && this.forecast < .5)) }
 
 	async updateCache(repeat=true, kv=new Map()) {
 		do {

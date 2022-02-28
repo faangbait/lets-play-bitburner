@@ -16,8 +16,33 @@ const ACL = {
 	SHORT: 32, 	// 00100000
 }
 
+const sleepTime = 1000;
+const expectedTickTime = 6000;
+const accelTickTime = 4000;
+let inversionThreshold = 7;
+let cycleTick = 0;
+let cycleDetected = false;
+let currentTick = 0;
+const nearTermWindowLength = 10;
+
+function hasTickOccurred(stocks) {
+	return stocks.some(s => s.hasTicked);
+}
+
+function hasCycleOccurred(stocks) {
+	// determine whether a critical mass of inversions has happened
+	let inverted = stocks.reduce((a,b) => a + b.hasInverted, 0)
+	if (inverted > inversionThreshold) {
+		inversionThreshold = Math.min(inverted + 1, 15)
+		return true;
+	}
+	return false;
+}
+
 /** @param {NS} ns **/
 export async function main(ns) {
+    ns.disableLog("sleep");
+    ns.disableLog("asleep");
 	let player = new BasePlayer(ns, "player");
 	let permissions = 0;
 	permissions += ACL.WSE * player.market.manual.wse;
@@ -33,7 +58,7 @@ export async function main(ns) {
 	ns.print("TIX: ", !!(permissions & ACL.TIX))
 	ns.print("WSE4S: ", !!(permissions & ACL.WSE4S))
 	ns.print("TIX4S: ", !!(permissions & ACL.TIX4S))
-        ns.print("LIMIT: ", !!(permissions & ACL.LIMIT))
+    ns.print("LIMIT: ", !!(permissions & ACL.LIMIT))
 	ns.print("SHORT: ", !!(permissions & ACL.SHORT))
     
 	
@@ -47,7 +72,7 @@ export async function main(ns) {
     }
 
 	if (!(permissions & ACL.WSE)) { return }
-
+    
     if (permissions & ACL.TIX) {
         stocks = [];
         for (let s of stock_list) {
@@ -81,31 +106,44 @@ export async function main(ns) {
     }
 
 	while(true) {
-
-        if (permissions & ACL.TIX4S) {
-            // automatically buys and sells stocks based on
-            // forecast data
-
+        if (permissions & ACL.TIX4S) { cycleDetected = true; }
+        
+        if (permissions & ACL.TIX) {
             if (permissions & ACL.SHORT) {
-                // absolute value calculations for forecasts
                 stocks.sort((a,b) => b.absoluteForecast - a.absoluteForecast)
             } else {
-                stocks.sort((a,b) => b.forecast - a.forecast)
+                stocks.sort((a,b) => b.expected_value - a.expected_value)
             }
 
             for (let st of stocks) {
                 try {
-                    if (st.forecast < .5) { st.unbuy() }
-                    if (st.forecast > .5) { st.unsell()}
+                    if (cycleDetected) {
+                        if (st.bearish) { st.unbuy(); }
+                        if (st.bullish) { st.unsell(); }
+                    }
                 } catch {}
             }
 
-            for (let st of stocks) {
-                try {
-                    if (st.forecast > .535) { st.max_long(); }
-                    if (st.forecast < .465) { st.max_short(); }
-                } catch {}
-            }
+            try {
+                if (hasTickOccurred(stocks)) {
+                    currentTick = (currentTick + 1) % 75;
+                    // ns.tprint("Tick detected!")
+                    stocks.forEach(s => s.onTickDetected())
+
+                    if (hasCycleOccurred(stocks)) {
+                        // ns.tprint("Inversion detected!")
+                        cycleDetected = true;
+                        cycleTick = currentTick - nearTermWindowLength;
+                        stocks.forEach(s => s.cycleTick = cycleTick);
+                    }
+
+                    if (cycleDetected) {
+                        stocks.sort((a,b) => b.expected_value - a.expected_value)
+                        stocks.filter(s => s.bullish).forEach(s => s.max_long());
+                    }
+                }
+
+            } catch {}
         }
 
 		ns.clearLog();
@@ -123,7 +161,8 @@ export async function main(ns) {
 		}
 		pt.create(headers, rows);
 		ns.print(pt.print());
-		await ns.sleep(6000);
+
+		await ns.sleep(sleepTime);
 	}
 
 }
