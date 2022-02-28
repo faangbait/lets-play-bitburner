@@ -3,6 +3,7 @@ import BaseStock from "if.stock";
 import TIXStock from "if.stock.tix";
 import FourSigmaTIXStock from "if.stock.4s";
 import PrettyTable from "src.prettytable";
+import {stockExtenderLimit, stockExtenderShort } from "if.stock.short";
 
 const stock_list = ["ECP", "MGCP", "BLD", "CLRK", "OMTK", "FSIG", "KGI", "FLCM", "STM", "DCOMM", "HLS", "VITA", "ICRS", "UNV", "AERO", "OMN", "SLRS", "GPH", "NVMD", "WDS", "LXO", "RHOC", "APHE", "SYSC", "CTK", "NTLK", "OMGA", "FNS", "JGN", "SGC", "CTYS", "MDYN", "TITN"]
 
@@ -32,18 +33,18 @@ export async function main(ns) {
 	ns.print("TIX: ", !!(permissions & ACL.TIX))
 	ns.print("WSE4S: ", !!(permissions & ACL.WSE4S))
 	ns.print("TIX4S: ", !!(permissions & ACL.TIX4S))
-  ns.print("LIMIT: ", !!(permissions & ACL.LIMIT))
+        ns.print("LIMIT: ", !!(permissions & ACL.LIMIT))
 	ns.print("SHORT: ", !!(permissions & ACL.SHORT))
     
 	
-  let stocks = [];
-  for (let s of stock_list) {
-      stocks.push(new BaseStock(ns, s))
-  }
+    let stocks = [];
+    for (let s of stock_list) {
+        stocks.push(new BaseStock(ns, s))
+    }
 
-  for (let s of stocks) {
-      await s.updateCache(false);
-  }
+    for (let s of stocks) {
+        await s.updateCache(false);
+    }
 
 	if (!(permissions & ACL.WSE)) { return }
 
@@ -62,7 +63,19 @@ export async function main(ns) {
     }
 
     if (permissions & ACL.WSE4S) {}
-    	
+    
+    if (permissions & ACL.SHORT) {
+        for (let s of stocks) {
+            s = stockExtenderShort(ns, s)
+        }
+    }
+
+    if (permissions & ACL.LIMIT) {
+        for (let s of stocks) {
+            s = stockExtenderLimit(ns, s)
+        }
+    }
+	
     for (let s of stocks) {
         s.updateCache().catch(console.error)
     }
@@ -73,17 +86,24 @@ export async function main(ns) {
             // automatically buys and sells stocks based on
             // forecast data
 
-            stocks.sort((a,b) => b.forecast - a.forecast)
+            if (permissions & ACL.SHORT) {
+                // absolute value calculations for forecasts
+                stocks.sort((a,b) => b.absoluteForecast - a.absoluteForecast)
+            } else {
+                stocks.sort((a,b) => b.forecast - a.forecast)
+            }
 
             for (let st of stocks) {
                 try {
                     if (st.forecast < .5) { st.unbuy() }
+                    if (st.forecast > .5) { st.unsell()}
                 } catch {}
             }
 
             for (let st of stocks) {
                 try {
                     if (st.forecast > .535) { st.max_long(); }
+                    if (st.forecast < .465) { st.max_short(); }
                 } catch {}
             }
         }
