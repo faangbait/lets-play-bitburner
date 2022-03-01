@@ -1,206 +1,235 @@
+import HWGWBaseServer from "./if.server.hwgw"
 import HackableBaseServer from "./if.server.hackable"
-import BasePlayer from "./if.player";
-import {numCycleForGrowthCorrected} from "./if.server.hackable"
 
-/**
- * returns an array of servers dynamically
- */
-function dpList(ns, current="home", set=new Set()) {
-	let connections = ns.scan(current)
-	let next = connections.filter(c => !set.has(c))
-	next.forEach(n => {
-		set.add(n);
-		return dpList(ns, n, set)
-	})
-	return Array.from(set.keys())
-}
+import { numCycleForGrowthCorrected } from "./if.server.hwgw"
+import { dpList } from "./lib.utils";
 
 export async function main(ns) {
-	let player = new BasePlayer(ns, "player")
+    // gather servers stage
+    let servers = dpList(ns).map(s => new HWGWBaseServer(ns, s))
+    
+    let available_ram = new Map();
+    
+    while(true) {
+        let targets = servers.filter(s => s.isTarget);
+        let attackers = servers.filter(s => s.isAttacker);
+        attackers.forEach(a => available_ram.set(a.id, a.ram.free))
+    
+        // sort stage
+        attackers.sort((a,b) => a.isHome - b.isHome)
+        targets.sort((a,b) => b.hwgw_value - a.hwgw_value)
+        
+        // prep stage
+        let ready_targets = targets.filter(t => t.money.max == t.money.available && t.security.level == t.security.min)
+        let unready_targets = targets.filter(t => t.money.max != t.money.available || t.security.level != t.security.min)
 
-	let slist = dpList(ns);
-	let servers = [];
-	for (let s of slist) {
-		servers.push(new HackableBaseServer(ns, s))
-	}
-	servers.sort((a,b) => a.isHome - b.isHome)
-	let home = new HackableBaseServer(ns, "home");
+        // ensure the minimum required ready targets
+        let required_ready_targets = targets.reduce(function(acc, target) {
+            let batch_ram = target.perfect_batch.hk * 1.75 + target.perfect_batch.gr * 1.8 + target.perfect_batch.wk1 * 1.8 + target.perfect_batch.wk2 * 1.8;
+            let simultaneous_batches = (ns.getHackTime(target.id) * 4) / 160;
+            let ram_required = batch_ram * simultaneous_batches;
 
-	let targets = servers.filter(s => s.isTarget);
-	targets.sort((a,b) => b.money.growth - a.money.growth)
-	let target = targets[0];
+            if (ram_required <= acc[acc.length-1]) {
+                acc.push(acc[acc.length - 1] - ram_required)
+            }
+            return acc
 
-	let growThreads = numCycleForGrowthCorrected(ns.getServer(target.id), target.money.max, target.money.available, ns.getPlayer(), home.cores);
-	let weakThreads1 = Math.ceil((target.security.level - target.security.min) * 20)
-	let weakThreads2 = Math.ceil(growThreads / 12.5)
+        },[attackers.reduce((a,b) => a + b.ram.max, 0)]).length
 
-	
-	while (growThreads > 0 || weakThreads1 > 0 || weakThreads2 > 0) {
-		// prepare a server that will be the target of our batch
-		growThreads = numCycleForGrowthCorrected(ns.getServer(target.id), target.money.max, target.money.available, ns.getPlayer(), home.cores);
-		weakThreads1 = Math.ceil((target.security.level - target.security.min) * 20)
-		weakThreads2 = Math.ceil(growThreads / 12.5)
+        // let required_ready_targets = 11;
+    
+      
+        if (ready_targets.length >= required_ready_targets) {
+            // hwgw stage
+            for (let target of ready_targets) {
+                let proposed_batch = calculate_hwgw_batch(ns, target);
+                let result = run_hwgw_batch(ns, attackers, target, proposed_batch, available_ram);
+                if (result) {
+                    available_ram = result;
+                }
+                await ns.sleep(1);
+            }
+        } else {
+            // prepare more ready targets
+            let prepTimes = [];
+            for (let target of unready_targets) {
+                let proposed_batch = calculate_hwgw_batch(ns, target, true);
+                let result = run_hwgw_batch(ns, attackers, target, proposed_batch, available_ram);
+                if (result) {
+                    available_ram = result;
+                    prepTimes.push(Math.ceil(proposed_batch.landing.wk2 - performance.now()))
+                }
+                await ns.sleep(160);
+            }
 
-		if (home.threadCount(1.75) >= (growThreads + weakThreads1 + weakThreads2)) {
-			if (weakThreads1 > 0) {
-				ns.exec("bin.wk.js", "home", weakThreads1, target.id)
-			}
-			if (growThreads > 0) {
-				ns.exec("bin.gr.js", "home", growThreads, target.id)
-			}
-		} else {
-			if (weakThreads1 > 0 && home.threadCount(1.75) > 0) {
-				ns.exec("bin.wk.js", "home", Math.min(weakThreads1, home.threadCount(1.75)), target.id)
-			} else if (growThreads > 0 && home.threadCount(1.75) > 0) {
-				ns.exec("bin.gr.js", "home", Math.min(growThreads, home.threadCount(1.75)), target.id)
-			} else if (weakThreads2 > 0 && home.threadCount(1.75) > 0) {
-				ns.exec("bin.wk.js", "home", Math.min(weakThreads2, home.threadCount(1.75)), target.id)
-			}
-		}
+            if (prepTimes.length > 0) {
+                prepTimes.sort((a,b) => b-a)
+                await ns.sleep(prepTimes[0])
+            }
+        }
 
-		await ns.sleep(10);
-	}
+        await ns.sleep(160)
+    }
+}
 
+function reduce_available_ram(ram_map, attacker, threads, threadRam) {
+    ram_map.set(attacker.id, ram_map.get(attacker.id) - (threads * threadRam))
+    return ram_map
+}
 
-	while (true) {
-		let attackers = servers.filter(s => s.isAttacker);
-		targets = servers.filter(s => s.isTarget);
-		targets.sort((a,b) => b.money.growth - a.money.growth)
+function reduce_proposed_batch(proposed_batch, property, threads) {
+    proposed_batch.threads[property] -= threads
+    return proposed_batch
+}
 
-		let available_ram = new Map();
-		for (let server of attackers) {
-			available_ram.set(server.id, server.ram.free)
-		};
-		for (let target of targets) {
-			// skim the approprate amount of money off the server
-			// weaken the server to bring back to zero security
-			// grow the server to replace this money
-			// weaken the server to bring back to zero security
+/**
+ * Calculates required threads and timings for an hwgw batch.
+ * 
+ * @param {import(".").NS} ns 
+ * @param {HackableBaseServer} target 
+ * @returns 
+ */
+function calculate_hwgw_batch(ns, target, prep_batch=false) {
+    const home = new HackableBaseServer(ns, "home")
+    const batch_lag = 160;
+    
+    const hackThreads = (prep_batch) ? 0 : target.perfect_batch.hk
+    const weakThreads1 = target.perfect_batch.wk1 + ((target.security.level - target.security.min) * 20)
+    
+    let growThreads = numCycleForGrowthCorrected(
+        ns.getServer(target.id), 
+        target.money.max, 
+        target.money.available, 
+        ns.getPlayer(), 
+        home.cores);
 
-			let hackPercent = .1;
-			let hackThreads = Math.floor(ns.hackAnalyzeThreads(target.id, target.money.max * hackPercent))
-			weakThreads1 = Math.ceil((hackThreads / 25) + (target.security.level - target.security.min) * 20)
-			growThreads = numCycleForGrowthCorrected(ns.getServer(target.id), target.money.max, target.money.available, ns.getPlayer(), home.cores)
-			growThreads += numCycleForGrowthCorrected(ns.getServer(target.id), target.money.max, target.money.max * (1 - hackPercent) , ns.getPlayer(), home.cores);
-			weakThreads2 = Math.ceil(growThreads / 12.5)
+    growThreads += (prep_batch) ? 0 : target.perfect_batch.gr
 
-			let hackTime = ns.getHackTime(target.id);
-			let growTime = hackTime * 3.2;
-			let weakenTime = hackTime * 4;
-			let currentTime = performance.now();
-			let next_landing = weakenTime + 160 + currentTime;
-			let nextBatch = []
+    
+    const weakThreads2 = target.perfect_batch.wk2
 
-			let proposed_batch = {
-				hk: hackThreads,
-				wk1: weakThreads1,
-				gr: growThreads,
-				wk2: weakThreads2
-			}
+    const hackTime = (hackThreads) ? ns.getHackTime(target.id) : 0;
+    const growTime = (growThreads) ? ns.getHackTime(target.id) * 3.2 : 0;
+    const weakenTime = (weakThreads1 || weakThreads2) ? ns.getHackTime(target.id) * 4 : 0;
+    const currentTime = performance.now();
+    const next_landing = Math.max(hackTime, growTime, weakenTime) + currentTime + batch_lag;
 
-			for (let server of servers) {
-				if (proposed_batch.hk > 0) {
-					if (available_ram.get(server.id) > proposed_batch.hk * 1.7) {
-						nextBatch.push({
-							attacker: server.id,
-							filename: "bin.hk.js",
-							threads: proposed_batch.hk,
-							landing: next_landing
-						})
-						available_ram.set(server.id, available_ram.get(server.id) - proposed_batch.hk * 1.7)
-						proposed_batch.hk = 0;
-					}
-				}
-			}
+    return {
+        threads: {
+            hk: hackThreads,
+            wk1: weakThreads1,
+            gr: growThreads,
+            wk2: weakThreads2
+        },
+        landing: {
+            hk: Math.floor(next_landing),
+            wk1: Math.floor(next_landing + (batch_lag * .25)),
+            gr: Math.floor(next_landing + (batch_lag * .5)),
+            wk2: Math.floor(next_landing + (batch_lag * .75))
+        },
+        filename: {
+            hk: "bin.hk.js",
+            gr: "bin.gr.js",
+            wk: "bin.wk.js"
+        },
+        ram: {
+            hk: 1.75,
+            gr: 1.8,
+            wk: 1.8
+        }
+    }
+}
 
-			if (available_ram.get(home.id) > proposed_batch.gr * 1.75) {
+/**
+ * Execs a full batch, if possible. Otherwise, does nothing.
+ * 
+ * @param {import(".").NS} ns 
+ * @param {HackableBaseServer[]} attackers 
+ * @param {HackableBaseServer} target 
+ * @param {Object} batch 
+ * @param {Map<id,ram>} ram_map 
+ * @returns 
+ */
+function run_hwgw_batch(ns, attackers, target, batch, available_ram) {
+    let nextBatch = [];
+    const hackThreads = batch.threads.hk;
+    const growThreads = batch.threads.gr;
+    const weakThreads1 = batch.threads.wk1;
+    const weakThreads2 = batch.threads.wk2;
+    let ram_map = new Map(available_ram); // clone the map so we don't modify it if we fail sanity checks
+        
+    attackers.forEach(function(a) {
+        let alloc;
 
-				nextBatch.push({
-					attacker: home.id,
-					filename: "bin.gr.js",
-					threads: proposed_batch.gr,
-					landing: next_landing + 80
-				})
+        // localize grow threads to home
+        if (a.isHome) {
+            alloc = Math.floor(Math.min(batch.threads.gr, ram_map.get(a.id) / batch.ram.gr))
+            if (alloc > 0) {
+                nextBatch.push({
+                    attacker: a.id,
+                    filename: batch.filename.gr,
+                    threads: alloc,
+                    landing: batch.landing.gr
+                })
+                ram_map = reduce_available_ram(ram_map, a, alloc, batch.ram.gr)
+                batch = reduce_proposed_batch(batch, "gr", alloc)
+            }
+        }
 
-				available_ram.set(home.id, available_ram.get(home.id) - proposed_batch.gr * 1.75);
-				proposed_batch.gr = 0;
-			}
+        // localize hack threads to any single server that can handle the load
+        alloc = Math.floor(Math.min(batch.threads.hk, ram_map.get(a.id) / batch.ram.hk))
 
+        if (alloc == batch.threads.hk && alloc > 0) {
+            nextBatch.push({
+                attacker: a.id,
+                filename: batch.filename.hk,
+                threads: alloc,
+                landing: batch.landing.hk
+            })
+            ram_map = reduce_available_ram(ram_map, a, alloc, batch.ram.hk)
+            batch = reduce_proposed_batch(batch, "hk", alloc)
+        }
 
-			for (let server of servers) {
-				if (proposed_batch.wk1 > 0) {
-					if (available_ram.get(server.id) > proposed_batch.wk1 * 1.75) {
-						nextBatch.push({
-							attacker: server.id,
-							filename: "bin.wk.js",
-							threads: proposed_batch.wk1,
-							landing: next_landing + 40
-						})
-						available_ram.set(server.id, available_ram.get(server.id) - proposed_batch.wk1 * 1.75)
-						proposed_batch.wk1 = 0;
+        // distribute weak threads among any remaining servers
+        alloc = Math.floor(Math.min(batch.threads.wk1, ram_map.get(a.id) / batch.ram.wk))
+        if (alloc > 0) {
+            nextBatch.push({
+                attacker: a.id,
+                filename: batch.filename.wk,
+                threads: alloc,
+                landing: batch.landing.wk1
+            })
+            ram_map = reduce_available_ram(ram_map, a, alloc, batch.ram.wk)
+            batch = reduce_proposed_batch(batch, "wk1", alloc)
+        }
 
-					} else {
-						let available_threads = Math.floor((available_ram.get(server.id) / 1.75));
-						if (available_threads > 0) {
-							let batch = {
-								attacker: server.id,
-								filename: "bin.wk.js",
-								threads: Math.floor((available_ram.get(server.id) / 1.75)),
-								landing: next_landing + 40
-							}
-							nextBatch.push(batch)
-							available_ram.set(server.id, available_ram.get(server.id) - batch.threads * 1.75)
-							proposed_batch.wk1 = proposed_batch.wk1 - batch.threads;
-						}
-					}
-				}
-				
-				if (proposed_batch.wk2 > 0) {
-					if (available_ram.get(server.id) > proposed_batch.wk2 * 1.75) {
-						nextBatch.push({
-							attacker: server.id,
-							filename: "bin.wk.js",
-							threads: proposed_batch.wk2,
-							landing: next_landing + 120
-						})
-						available_ram.set(server.id, available_ram.get(server.id) - proposed_batch.wk1 * 1.75)
-						proposed_batch.wk2 = 0;
-					} else {
-						let available_threads = Math.floor((available_ram.get(server.id) / 1.75));
-						if (available_threads > 0) {
-							let batch = {
-								attacker: server.id,
-								filename: "bin.wk.js",
-								threads: available_threads,
-								landing: next_landing + 120
-							}
-							nextBatch.push(batch)
-							available_ram.set(server.id, available_ram.get(server.id) - batch.threads * 1.75)
-							proposed_batch.wk2 = proposed_batch.wk2 - batch.threads;
+        alloc = Math.floor(Math.min(batch.threads.wk2, ram_map.get(a.id) / batch.ram.wk))
+        if (alloc > 0) {
+            nextBatch.push({
+                attacker: a.id,
+                filename: batch.filename.wk,
+                threads: alloc,
+                landing: batch.landing.wk2
+            })
+            ram_map = reduce_available_ram(ram_map, a, alloc, batch.ram.wk)
+            batch = reduce_proposed_batch(batch, "wk2", alloc)
+        }
+    })
+    
+    const wkScheduled = nextBatch.filter(b => b.filename == batch.filename.wk)
+    const hkScheduled = nextBatch.filter(b => b.filename == batch.filename.hk)
+    const grScheduled = nextBatch.filter(b => b.filename == batch.filename.gr)
 
-						}
-					}
-				}
+    const wkSanityCheck = (wkScheduled.reduce((a,b) => a + b.threads, 0) == (weakThreads1 + weakThreads2))
+    const hkSanityCheck = (hkScheduled.reduce((a,b) => a + b.threads, 0) == hackThreads)
+    const grSanityCheck = (grScheduled.reduce((a,b) => a + b.threads, 0) == growThreads)
 
-			}
-
-			let wkSanityCheck = nextBatch.filter(batch => batch.filename == "bin.wk.js")
-			let hkSanityCheck = nextBatch.filter(batch => batch.filename == "bin.hk.js")
-			let grSanityCheck = nextBatch.filter(batch => batch.filename == "bin.gr.js")
-			
-			if (wkSanityCheck.reduce((a,b) => a + b.threads, 0) == weakThreads1 + weakThreads2) {
-				if (hkSanityCheck.reduce((a,b) => a + b.threads, 0) == hackThreads) {
-					if (grSanityCheck.reduce((a,b) => a + b.threads, 0) == growThreads) {
-						for (let cmd of nextBatch) {
-							ns.exec(cmd.filename, cmd.attacker, cmd.threads, target.id, false, cmd.landing)
-						}
-					}
-				}
-			}
-
-		}
-
-		await ns.sleep(160)
-	}
-
+    // make sure our batch matches the threads requested initially
+    // exec and return modified ram
+    if (wkSanityCheck && hkSanityCheck && grSanityCheck) {
+        for (let cmd of nextBatch) {
+            ns.exec(cmd.filename, cmd.attacker, cmd.threads, target.id, false, cmd.landing)
+        }
+        return ram_map
+    }
 }
